@@ -187,3 +187,36 @@ def test_boolean_rule_on_numeric_sensor_allowed(demo_sensors):
     parsed = rules.validate_parsed(ok, KNOWN)
     row = rules.create_pending_rule("ok", parsed)
     assert row["status"] == "pending_confirm"
+
+
+# ---------- context reaches the vision prompt ----------
+
+def test_ask_image_injects_context_into_system_prompt(tmp_path, monkeypatch):
+    captured = {}
+
+    def fake_chat(messages, **kw):
+        captured["messages"] = messages
+        return '{"answer": "no", "reason": "ok"}'
+
+    monkeypatch.setattr(llm, "_chat", fake_chat)
+    img = tmp_path / "x.jpg"
+    img.write_bytes(b"\xff\xd8fake")
+    out = llm.ask_image(str(img), "Is the box empty?",
+                        context="Camera 2 monitors the 2nd floor break room.")
+    assert out["answer"] == "no"
+    system = captured["messages"][0]["content"]
+    assert "Camera 2 monitors the 2nd floor break room." in system
+
+
+def test_ask_image_without_context_unchanged(tmp_path, monkeypatch):
+    captured = {}
+
+    def fake_chat(messages, **kw):
+        captured["messages"] = messages
+        return '{"answer": "no", "reason": "ok"}'
+
+    monkeypatch.setattr(llm, "_chat", fake_chat)
+    img = tmp_path / "x.jpg"
+    img.write_bytes(b"\xff\xd8fake")
+    llm.ask_image(str(img), "Is the box empty?")
+    assert "Camera context" not in captured["messages"][0]["content"]

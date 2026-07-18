@@ -104,7 +104,13 @@ def evaluate(rule_row: dict, reading: dict) -> dict:
         elif rule["modality"] == "image":
             if not reading.get("image_path"):
                 raise ValueError("image rule evaluated against a reading with no image")
-            answer = llm.ask_image(reading["image_path"], rule["condition"]["question"])
+            sensor = db.get_sensor(reading["sensor_id"]) or {}
+            context = sensor.get("context") or ""
+            if not context and sensor.get("location"):
+                context = f"This camera is located at: {sensor['location']}."
+            answer = llm.ask_image(reading["image_path"],
+                                   rule["condition"]["question"],
+                                   context=context)
             model_answer = json.dumps({"answer": answer["answer"], "reason": answer["reason"]})
             latency_ms = answer.get("latency_ms")
             if answer["answer"] == "yes":

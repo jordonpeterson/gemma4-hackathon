@@ -23,6 +23,7 @@ class SensorCreate(BaseModel):
     name: str
     kind: str  # image | numeric | boolean
     location: str = ""
+    context: str = ""  # free text injected into vision prompts for this sensor
 
 
 class ReadingCreate(BaseModel):
@@ -103,7 +104,7 @@ def create_sensor(req: SensorCreate):
         raise HTTPException(400, "kind must be image|numeric|boolean")
     if db.get_sensor_by_name(req.name):
         raise HTTPException(409, f"sensor {req.name!r} already exists")
-    sensor_id = db.create_sensor(req.name, req.kind, req.location)
+    sensor_id = db.create_sensor(req.name, req.kind, req.location, req.context)
     return db.get_sensor(sensor_id)
 
 

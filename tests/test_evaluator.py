@@ -167,7 +167,7 @@ def _image_reading(demo_sensors, tmp_path):
 
 
 def test_image_yes_triggers(demo_sensors, tmp_path, monkeypatch):
-    monkeypatch.setattr(llm, "ask_image", lambda p, q: {
+    monkeypatch.setattr(llm, "ask_image", lambda p, q, **kw: {
         "answer": "yes", "reason": "box is empty", "latency_ms": 1234})
     rule = _mk_rule(demo_sensors["breakroom_cam"], _image_rule())
     out = evaluator.evaluate(rule, _image_reading(demo_sensors, tmp_path))
@@ -179,7 +179,7 @@ def test_image_yes_triggers(demo_sensors, tmp_path, monkeypatch):
 
 
 def test_image_no_is_ok(demo_sensors, tmp_path, monkeypatch):
-    monkeypatch.setattr(llm, "ask_image", lambda p, q: {
+    monkeypatch.setattr(llm, "ask_image", lambda p, q, **kw: {
         "answer": "no", "reason": "cans visible", "latency_ms": 1000})
     rule = _mk_rule(demo_sensors["breakroom_cam"], _image_rule())
     out = evaluator.evaluate(rule, _image_reading(demo_sensors, tmp_path))
@@ -188,7 +188,7 @@ def test_image_no_is_ok(demo_sensors, tmp_path, monkeypatch):
 
 
 def test_image_unsure_writes_error_row_not_alert(demo_sensors, tmp_path, monkeypatch):
-    monkeypatch.setattr(llm, "ask_image", lambda p, q: {
+    monkeypatch.setattr(llm, "ask_image", lambda p, q, **kw: {
         "answer": "unsure", "reason": "image too dark", "latency_ms": 900})
     rule = _mk_rule(demo_sensors["breakroom_cam"], _image_rule())
     out = evaluator.evaluate(rule, _image_reading(demo_sensors, tmp_path))
@@ -197,3 +197,47 @@ def test_image_unsure_writes_error_row_not_alert(demo_sensors, tmp_path, monkeyp
     ev = db.last_evaluation_for_rule(rule["id"])
     assert ev["result"] == "error"
     assert db.last_alert_for_rule(rule["id"]) is None
+
+
+# ---------- sensor context injection ----------
+
+def test_evaluator_passes_sensor_context_to_ask_image(fresh_db, tmp_path, monkeypatch):
+    sid = db.create_sensor("snack_cam", "image", "2nd floor break room",
+                           context="Watches the snack wall by the kitchen.")
+    captured = {}
+
+    def fake_ask(path, question, context=""):
+        captured["context"] = context
+        return {"answer": "no", "reason": "stocked", "latency_ms": 1}
+
+    monkeypatch.setattr(llm, "ask_image", fake_ask)
+    rule = _mk_rule(sid, {
+        "sensor": "snack_cam", "modality": "image",
+        "condition": {"type": "visual_question", "question": "Is any basket empty?"},
+        "action": {"type": "alert", "message": "Restock"},
+        "cooldown_minutes": 0,
+    })
+    p = tmp_path / "img.png"
+    p.write_bytes(b"\x89PNG\r\n\x1a\nfake")
+    rd = db.get_reading(db.create_reading(sid, "image", image_path=str(p)))
+    evaluator.evaluate(rule, rd)
+    assert captured["context"] == "Watches the snack wall by the kitchen."
+
+
+def test_evaluator_falls_back_to_location_context(fresh_db, tmp_path, monkeypatch):
+    sid = db.create_sensor("cam2", "image", "loading dock")  # no context
+    captured = {}
+    monkeypatch.setattr(llm, "ask_image",
+                        lambda p, q, context="": (captured.update(c=context)
+                                                  or {"answer": "no", "reason": "",
+                                                      "latency_ms": 1}))
+    rule = _mk_rule(sid, {
+        "sensor": "cam2", "modality": "image",
+        "condition": {"type": "visual_question", "question": "Door open?"},
+        "action": {"type": "alert", "message": "x"}, "cooldown_minutes": 0,
+    })
+    p = tmp_path / "i.png"
+    p.write_bytes(b"x")
+    rd = db.get_reading(db.create_reading(sid, "image", image_path=str(p)))
+    evaluator.evaluate(rule, rd)
+    assert "loading dock" in captured["c"]

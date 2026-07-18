@@ -176,7 +176,7 @@ def test_schemaless_parsed_json_does_not_kill_cycle(demo_sensors):
 # =========================================================================
 
 def test_run_cycle_png_to_alert(demo_sensors, monkeypatch):
-    monkeypatch.setattr(llm, "ask_image", lambda p, q: {
+    monkeypatch.setattr(llm, "ask_image", lambda p, q, **kw: {
         "answer": "yes", "reason": "empty", "latency_ms": 5})
     rule = _mk_rule(demo_sensors["breakroom_cam"], _image_rule())
     f = _inbox_file("breakroom_cam/shot.png")

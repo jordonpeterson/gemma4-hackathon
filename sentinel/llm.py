@@ -135,17 +135,24 @@ def parse_rule(text: str, known_sensors: list[str]) -> dict:
     return {"error": "parse_failed", "detail": last_error}
 
 
-def ask_image(image_path: str, question: str) -> dict:
+def ask_image(image_path: str, question: str, context: str = "") -> dict:
     """Ask a yes/no question about an image.
+
+    `context` is free text describing what the camera watches ("Fixed camera
+    monitoring the snack wall in the 2nd floor break room") — it's appended
+    to the system prompt so the model interprets ambiguous frames correctly.
 
     Always returns {"answer": "yes"|"no"|"unsure", "reason": str,
     "latency_ms": int}. Anything unparseable maps to "unsure".
     """
+    system = _IMAGE_SYSTEM
+    if context:
+        system += f"\n\nCamera context: {context.strip()}"
     mime = mimetypes.guess_type(image_path)[0] or "image/jpeg"
     with open(image_path, "rb") as fh:
         b64 = base64.b64encode(fh.read()).decode()
     messages = [
-        {"role": "system", "content": _IMAGE_SYSTEM},
+        {"role": "system", "content": system},
         {"role": "user", "content": [
             {"type": "image_url",
              "image_url": {"url": f"data:{mime};base64,{b64}"}},

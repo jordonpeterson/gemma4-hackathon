@@ -38,15 +38,15 @@ python -m sentinel              # API + scheduler on http://127.0.0.1:8000
 
 ### Model
 
-Target model is **Gemma 4 E2B (Q4_K_M GGUF)**. No multimodal GGUF of it is
-published at the time of writing, so the default is the spec's fallback:
-**Gemma 3 4B-it** with its vision projector, pulled automatically from
-[`ggml-org/gemma-3-4b-it-GGUF`](https://huggingface.co/ggml-org/gemma-3-4b-it-GGUF)
-by `llama-server -hf`. Everything model-facing lives behind `sentinel/llm.py`,
-so swapping models is one env var:
+Default is **Gemma 4 E2B** (instruction-tuned, dynamic 4-bit GGUF with vision
+projector), pulled automatically from
+[`unsloth/gemma-4-E2B-it-GGUF`](https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF)
+by `llama-server -hf` on first run. Everything model-facing lives behind
+`sentinel/llm.py`, so swapping models is one env var — e.g. the Gemma 3
+fallback if E2B vision misbehaves on your llama.cpp build:
 
 ```bash
-MODEL_HF=ggml-org/gemma-4-e2b-it-GGUF ./scripts/run_model.sh   # when it exists
+MODEL_HF=ggml-org/gemma-3-4b-it-GGUF ./scripts/run_model.sh
 ```
 
 ## The demo (definition of done)

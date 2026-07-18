@@ -56,12 +56,15 @@ def draw_box(cans: int):
 def main() -> None:
     db.init_db()
 
-    for name, kind, location in (
-        ("breakroom_cam", "image", "break room"),
-        ("keg_scale", "numeric", "bar"),
+    for name, kind, location, context in (
+        ("breakroom_cam", "image", "2nd floor break room",
+         "Fixed camera watching the snack station in the 2nd floor break room. "
+         "It shows wire racks and baskets holding snack bags, cookies, fruit "
+         "snacks and candy, plus a cardboard box of canned drinks."),
+        ("keg_scale", "numeric", "bar", ""),
     ):
         if db.get_sensor_by_name(name) is None:
-            db.create_sensor(name, kind, location)
+            db.create_sensor(name, kind, location, context)
             print(f"created sensor {name} ({kind})")
         else:
             print(f"sensor {name} already exists")

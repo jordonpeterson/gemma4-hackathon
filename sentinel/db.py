@@ -18,6 +18,9 @@ CREATE TABLE IF NOT EXISTS sensors(
   name TEXT UNIQUE NOT NULL,
   kind TEXT NOT NULL CHECK(kind IN ('image','numeric','boolean')),
   location TEXT,
+  context TEXT,                -- free text injected into vision prompts,
+                               -- e.g. "Fixed camera watching the snack wall
+                               -- in the 2nd floor break room"
   created_at TEXT DEFAULT (datetime('now'))
 );
 CREATE TABLE IF NOT EXISTS rules(
@@ -73,6 +76,10 @@ def get_conn() -> Iterator[sqlite3.Connection]:
 def init_db() -> None:
     with get_conn() as conn:
         conn.executescript(SCHEMA)
+        # Lightweight migration for DBs created before sensors.context existed.
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(sensors)")}
+        if "context" not in cols:
+            conn.execute("ALTER TABLE sensors ADD COLUMN context TEXT")
 
 
 def _rows(cur) -> list[dict[str, Any]]:
@@ -86,11 +93,12 @@ def _row(cur) -> Optional[dict[str, Any]]:
 
 # ---------- sensors ----------
 
-def create_sensor(name: str, kind: str, location: str = "") -> int:
+def create_sensor(name: str, kind: str, location: str = "",
+                  context: str = "") -> int:
     with get_conn() as conn:
         cur = conn.execute(
-            "INSERT INTO sensors(name, kind, location) VALUES (?,?,?)",
-            (name, kind, location),
+            "INSERT INTO sensors(name, kind, location, context) VALUES (?,?,?,?)",
+            (name, kind, location, context),
         )
         return cur.lastrowid
 
