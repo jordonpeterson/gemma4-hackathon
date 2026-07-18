@@ -161,7 +161,7 @@ def ask_image(image_path: str, question: str, context: str = "") -> dict:
     ]
     start = time.monotonic()
     try:
-        raw = _chat(messages, max_tokens=128)
+        raw = _chat(messages, max_tokens=512)
     except Exception as exc:
         latency = int((time.monotonic() - start) * 1000)
         return {"answer": "unsure", "reason": f"llm error: {exc}", "latency_ms": latency}
@@ -174,6 +174,7 @@ def ask_image(image_path: str, question: str, context: str = "") -> dict:
         return {"answer": answer,
                 "reason": str(data.get("reason", "")),
                 "latency_ms": latency}
-    except Exception:
+    except Exception as e:
+        log.error("ask_image parse failed (%s); raw output len=%d: %s", e, len(raw), raw[:500])
         return {"answer": "unsure", "reason": f"unparseable model output: {raw[:200]}",
                 "latency_ms": latency}
