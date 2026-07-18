@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sentinel</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #181b22; --border: #2a2f3a;
+    --text: #e6e8ee; --muted: #9aa3b2; --accent: #5b9dff;
+    --ok: #3fb96f; --warn: #e0b13f; --bad: #e05b5b;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+         background: var(--bg); color: var(--text); }
+  header { display: flex; align-items: baseline; gap: 12px; padding: 16px 24px;
+           border-bottom: 1px solid var(--border); }
+  header h1 { margin: 0; font-size: 20px; letter-spacing: .5px; }
+  #health { font-size: 13px; color: var(--muted); }
+  #health .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+                 margin-right: 4px; background: var(--bad); }
+  #health .dot.up { background: var(--ok); }
+  main { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; padding: 16px 24px; }
+  @media (max-width: 1100px) { main { grid-template-columns: 1fr; } }
+  section { background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+            padding: 16px; min-height: 200px; }
+  h2 { margin: 0 0 12px; font-size: 15px; text-transform: uppercase;
+       letter-spacing: 1px; color: var(--muted); }
+  textarea { width: 100%; min-height: 70px; background: #10131a; color: var(--text);
+             border: 1px solid var(--border); border-radius: 8px; padding: 10px; font: inherit;
+             resize: vertical; }
+  button { background: var(--accent); color: #0b0d12; border: 0; border-radius: 8px;
+           padding: 8px 14px; font: inherit; font-weight: 600; cursor: pointer; }
+  button.secondary { background: transparent; color: var(--muted);
+                     border: 1px solid var(--border); }
+  button.small { padding: 4px 10px; font-size: 13px; }
+  .card { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px;
+          margin: 8px 0; background: #10131a; }
+  .muted { color: var(--muted); font-size: 13px; }
+  .badge { display: inline-block; font-size: 11px; font-weight: 700; padding: 2px 8px;
+           border-radius: 999px; text-transform: uppercase; letter-spacing: .5px; }
+  .badge.active { background: #143324; color: var(--ok); }
+  .badge.pending_confirm { background: #33290f; color: var(--warn); }
+  .badge.disabled { background: #2a2020; color: var(--muted); }
+  .badge.triggered { background: #331414; color: var(--bad); }
+  .badge.ok { background: #143324; color: var(--ok); }
+  .badge.error { background: #33290f; color: var(--warn); }
+  img.thumb { max-width: 120px; max-height: 90px; border-radius: 6px; display: block;
+              margin-top: 6px; }
+  #confirm-box { display: none; }
+  #confirm-box .summary { font-size: 15px; margin: 8px 0; }
+  .row { display: flex; gap: 8px; margin-top: 8px; }
+  pre { white-space: pre-wrap; word-break: break-word; font-size: 12px; color: var(--muted);
+        margin: 6px 0 0; }
+  .err { color: var(--bad); font-size: 13px; margin-top: 8px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Sentinel</h1>
+  <span id="health"><span class="dot"></span>checking…</span>
+</header>
+<main>
+  <section id="teach">
+    <h2>Teach</h2>
+    <p class="muted">Describe a rule in plain English. Nothing activates until you confirm.</p>
+    <textarea id="instruction" placeholder="alert me when the coke box in the break room is empty"></textarea>
+    <div class="row">
+      <button id="parse-btn">Parse rule</button>
+    </div>
+    <div id="parse-err" class="err"></div>
+    <div id="confirm-box" class="card">
+      <div class="summary" id="confirm-summary"></div>
+      <pre id="confirm-json"></pre>
+      <div class="row">
+        <button id="confirm-btn">Confirm</button>
+        <button id="cancel-btn" class="secondary">Cancel</button>
+      </div>
+    </div>
+  </section>
+
+  <section id="status">
+    <h2>Status</h2>
+    <h3 class="muted">Sensors</h3>
+    <div id="sensors"></div>
+    <h3 class="muted">Rules</h3>
+    <div id="rules"></div>
+  </section>
+
+  <section id="alerts-panel">
+    <h2>Alerts</h2>
+    <div id="alerts"></div>
+    <h3 class="muted">Recent evaluations</h3>
+    <div id="evals"></div>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
+  c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+let pendingRuleId = null;
+
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  let body = null;
+  try { body = await r.json(); } catch (e) {}
+  if (!r.ok) throw new Error((body && (body.detail || body.error)) || r.statusText);
+  return body;
+}
+
+// --- Teach panel ---
+$("parse-btn").onclick = async () => {
+  $("parse-err").textContent = "";
+  $("confirm-box").style.display = "none";
+  const text = $("instruction").value.trim();
+  if (!text) return;
+  $("parse-btn").disabled = true;
+  $("parse-btn").textContent = "Parsing… (local model, may take a minute)";
+  try {
+    const row = await api("/api/rules/parse", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({text}),
+    });
+    pendingRuleId = row.id;
+    $("confirm-summary").innerHTML = esc(row.summary)
+      .replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/\*(.+?)\*/g, "<i>$1</i>");
+    $("confirm-json").textContent = JSON.stringify(row.parsed, null, 2);
+    $("confirm-box").style.display = "block";
+  } catch (e) {
+    $("parse-err").textContent = e.message;
+  } finally {
+    $("parse-btn").disabled = false;
+    $("parse-btn").textContent = "Parse rule";
+  }
+};
+
+$("confirm-btn").onclick = async () => {
+  if (pendingRuleId == null) return;
+  await api(`/api/rules/${pendingRuleId}/confirm`, {method: "POST"});
+  $("confirm-box").style.display = "none";
+  $("instruction").value = "";
+  pendingRuleId = null;
+  refresh();
+};
+
+$("cancel-btn").onclick = async () => {
+  if (pendingRuleId != null)
+    await api(`/api/rules/${pendingRuleId}/disable`, {method: "POST"});
+  $("confirm-box").style.display = "none";
+  pendingRuleId = null;
+  refresh();
+};
+
+// --- Status / alerts polling ---
+function imgTag(reading) {
+  if (!reading || !reading.image_path) return "";
+  const name = reading.image_path.split("/").pop();
+  return `<img class="thumb" src="/images/${encodeURIComponent(name)}" alt="">`;
+}
+
+async function refresh() {
+  try {
+    const [health, sensors, rules, alerts, evals] = await Promise.all([
+      api("/api/health"), api("/api/sensors"), api("/api/rules"),
+      api("/api/alerts?unacked=1"), api("/api/evaluations?limit=10"),
+    ]);
+
+    const dot = health.llama_server && health.db ? "up" : "";
+    $("health").innerHTML = `<span class="dot ${dot}"></span>` +
+      `model ${health.llama_server ? "up" : "DOWN"} · db ${health.db ? "ok" : "DOWN"}` +
+      ` · last cycle ${esc(health.last_cycle || "never")}`;
+
+    $("sensors").innerHTML = sensors.map(s => `
+      <div class="card">
+        <b>${esc(s.name)}</b> <span class="muted">${esc(s.kind)}${s.location ? " · " + esc(s.location) : ""}</span>
+        <div class="muted">${s.latest_reading
+          ? (s.kind === "image" ? "last image " + esc(s.latest_reading.created_at)
+             : "latest: " + esc(s.latest_reading.value) + " at " + esc(s.latest_reading.created_at))
+          : "no readings yet"}</div>
+        ${imgTag(s.latest_reading)}
+      </div>`).join("") || '<div class="muted">No sensors.</div>';
+
+    $("rules").innerHTML = rules.map(r => `
+      <div class="card">
+        <span class="badge ${esc(r.status)}">${esc(r.status)}</span>
+        <div>${esc(r.raw_instruction)}</div>
+        <div class="muted">${esc(r.summary).replace(/ Correct\?$/, "")}</div>
+        ${r.status !== "disabled"
+          ? `<div class="row"><button class="small secondary" onclick="disableRule(${r.id})">Disable</button></div>`
+          : ""}
+      </div>`).join("") || '<div class="muted">No rules yet.</div>';
+
+    $("alerts").innerHTML = alerts.map(a => `
+      <div class="card">
+        <b>${esc(a.message)}</b>
+        <div class="muted">${esc(a.sensor_name)} · ${esc(a.created_at)}</div>
+        <div class="row"><button class="small" onclick="ackAlert(${a.id})">Ack</button></div>
+      </div>`).join("") || '<div class="muted">No unacknowledged alerts.</div>';
+
+    $("evals").innerHTML = evals.map(e => `
+      <div class="card">
+        <span class="badge ${esc(e.result)}">${esc(e.result)}</span>
+        <span class="muted">${esc(e.sensor_name)} · ${esc(e.created_at)}</span>
+        <div class="muted">${esc(e.raw_instruction)}</div>
+        ${e.model_answer ? `<pre>${esc(e.model_answer)}</pre>` : ""}
+      </div>`).join("") || '<div class="muted">No evaluations yet.</div>';
+  } catch (e) {
+    $("health").innerHTML = `<span class="dot"></span>server unreachable`;
+  }
+}
+
+async function disableRule(id) { await api(`/api/rules/${id}/disable`, {method: "POST"}); refresh(); }
+async function ackAlert(id) { await api(`/api/alerts/${id}/ack`, {method: "POST"}); refresh(); }
+
+refresh();
+setInterval(refresh, 10000);
+</script>
+</body>
+</html>
