@@ -13,7 +13,10 @@ set -euo pipefail
 MODEL_HF="${MODEL_HF:-unsloth/gemma-4-E2B-it-GGUF:UD-Q4_K_XL}"
 PORT="${MODEL_PORT:-8080}"
 CTX="${MODEL_CTX:-4096}"
-THREADS="${MODEL_THREADS:-$(sysctl -n hw.perflevel0.logicalcpu 2>/dev/null || sysctl -n hw.logicalcpu 2>/dev/null || echo 4)}"
+# Physical cores, not logical: CPU inference is memory-bound and
+# hyperthread oversubscription usually slows it down.
+THREADS="${MODEL_THREADS:-$(sysctl -n hw.perflevel0.physicalcpu 2>/dev/null || sysctl -n hw.physicalcpu 2>/dev/null || echo 4)}"
+EXTRA_ARGS="${EXTRA_ARGS:-}"
 
 if ! command -v llama-server >/dev/null 2>&1; then
   echo "llama-server not found."
@@ -27,9 +30,14 @@ echo "First run downloads the GGUF + mmproj automatically (a few GB)."
 
 # -hf pulls the GGUF (and its mmproj for vision) from Hugging Face if missing.
 # --no-webui: we only need the OpenAI-compatible API.
+# --parallel 1: Sentinel serializes requests anyway; a single slot means the
+#   long constant system prompt stays cached between calls (big speedup on CPU).
+# --mlock: keep the model resident in RAM between poll cycles.
+# --cache-reuse 256: allow prefix-cache reuse across slightly-shifted prompts.
 exec llama-server \
   -hf "${MODEL_HF}" \
   --host 127.0.0.1 --port "${PORT}" \
   -c "${CTX}" \
   -t "${THREADS}" \
-  --no-webui
+  --parallel 1 --mlock --cache-reuse 256 \
+  --no-webui ${EXTRA_ARGS}
