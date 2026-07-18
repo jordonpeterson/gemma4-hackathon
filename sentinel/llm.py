@@ -11,6 +11,7 @@ share it).
 """
 import base64
 import json
+import logging
 import mimetypes
 import threading
 import time
@@ -20,6 +21,8 @@ import httpx
 from pydantic import ValidationError
 
 from sentinel import config, rules
+
+log = logging.getLogger(__name__)
 
 _LOCK = threading.Lock()
 
@@ -63,13 +66,22 @@ Instruction: "let me know when the compressor switches off"
 {"sensor": "compressor_state", "modality": "boolean", "condition": {"type": "state_change", "from": true, "to": false}, "action": {"type": "alert", "message": "Compressor switched off"}}
 """
 
-_IMAGE_SYSTEM = """You answer ONE yes/no question about the attached image.
+_IMAGE_SYSTEM = """You answer ONE yes/no question about the attached image of
+storage baskets/bins.
 
-Output ONLY a JSON object, no markdown fences:
+Work through it carefully — do NOT rush to an answer:
+1. Look at EACH basket or bin in the image, one at a time.
+2. For each, note in a few words whether it holds items or is empty.
+3. Only after examining all of them, decide the yes/no answer.
+
+If even one basket is empty and the question asks about empty baskets, the
+answer is "yes". Do not default to "no".
+
+Write your brief per-basket notes first. Then, on the LAST line, output ONLY a
+JSON object (no markdown fences) and nothing after it:
 {"answer": "yes" | "no" | "unsure", "reason": "<one short sentence>"}
 
-Answer "unsure" if the image is unclear or does not show what the question
-asks about. Never guess."""
+Use "unsure" only if the image is truly too unclear to tell."""
 
 
 def _chat(messages: list[dict], max_tokens: int = 512) -> str:
@@ -135,6 +147,29 @@ def parse_rule(text: str, known_sensors: list[str]) -> dict:
     return {"error": "parse_failed", "detail": last_error}
 
 
+def _last_json_object(text: str) -> str:
+    """Return the last balanced top-level {...} block in `text`.
+
+    The image prompt asks the model to write per-basket notes first and end
+    with a JSON line, so we can't assume the whole reply is JSON. Falls back to
+    the fence-stripped text (which then fails json.loads loudly) if none found.
+    """
+    depth = 0
+    start = -1
+    last = None
+    for i, ch in enumerate(text):
+        if ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}":
+            if depth > 0:
+                depth -= 1
+                if depth == 0 and start >= 0:
+                    last = text[start:i + 1]
+    return last if last is not None else rules.strip_fences(text)
+
+
 def ask_image(image_path: str, question: str, context: str = "") -> dict:
     """Ask a yes/no question about an image.
 
@@ -161,13 +196,15 @@ def ask_image(image_path: str, question: str, context: str = "") -> dict:
     ]
     start = time.monotonic()
     try:
-        raw = _chat(messages, max_tokens=512)
+        # Room for the model to examine each basket before the final JSON line;
+        # the terse "JSON-only" prompt made it skip analysis and default to "no".
+        raw = _chat(messages, max_tokens=1024)
     except Exception as exc:
         latency = int((time.monotonic() - start) * 1000)
         return {"answer": "unsure", "reason": f"llm error: {exc}", "latency_ms": latency}
     latency = int((time.monotonic() - start) * 1000)
     try:
-        data = json.loads(rules.strip_fences(raw))
+        data = json.loads(_last_json_object(raw))
         answer = str(data.get("answer", "")).strip().lower()
         if answer not in ("yes", "no", "unsure"):
             raise ValueError(f"bad answer {answer!r}")

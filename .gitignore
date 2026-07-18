@@ -7,3 +7,9 @@ inbox/
 .venv/
 venv/
 .DS_Store
+
+# IDE
+.idea/
+
+# any sqlite db (app uses sentinel.db; stray data.db got committed once)
+*.db

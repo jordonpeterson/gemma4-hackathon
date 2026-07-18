@@ -1,16 +1,19 @@
 #!/usr/bin/env bash
 # Start llama-server with a vision-capable Gemma GGUF, CPU-only.
 #
-# DEFAULT: Gemma 4 E2B instruction-tuned, dynamic 4-bit GGUF from Unsloth
-# (https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF), auto-downloaded with
+# DEFAULT: Gemma 4 E4B instruction-tuned, dynamic 4-bit GGUF from Unsloth
+# (https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF), auto-downloaded with
 # its vision projector (mmproj) by llama.cpp's -hf flag on first run.
 # Requires a recent llama.cpp (brew upgrade llama.cpp if vision doesn't load).
 #
-# Fallback if E2B multimodal misbehaves on your llama.cpp build:
-#   MODEL_HF=ggml-org/gemma-3-4b-it-GGUF ./scripts/run_model.sh
+# E4B (not the smaller E2B) is required for the empty-bin vision task: E2B
+# consistently hallucinates contents into empty containers and cannot tell an
+# empty bin from a full one. E4B perceives it correctly. Tradeoff: ~2x slower
+# on CPU (~60s/image vs ~30s). To try the smaller/faster model anyway:
+#   MODEL_HF=unsloth/gemma-4-E2B-it-GGUF:UD-Q4_K_XL ./scripts/run_model.sh
 set -euo pipefail
 
-MODEL_HF="${MODEL_HF:-unsloth/gemma-4-E2B-it-GGUF:UD-Q4_K_XL}"
+MODEL_HF="${MODEL_HF:-unsloth/gemma-4-E4B-it-GGUF:UD-Q4_K_XL}"
 PORT="${MODEL_PORT:-8080}"
 CTX="${MODEL_CTX:-4096}"
 # Physical cores, not logical: CPU inference is memory-bound and
