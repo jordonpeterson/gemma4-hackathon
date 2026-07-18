@@ -130,6 +130,17 @@ pytest                          # no model needed, all mocked
 SENTINEL_LIVE_TESTS=1 pytest    # includes live llama-server integration test
 ```
 
+## Known MVP limitations
+
+- Images are base64'd into the request without downscaling. The seed images
+  are tiny; real camera JPEGs should be resized (~896 px) before dropping
+  them in the inbox, or `MODEL_CTX` raised, until a resize step is added.
+- Only the *latest* reading per sensor is evaluated each cycle; multiple
+  readings inside one poll interval collapse to the newest.
+- A freshly confirmed rule immediately evaluates the sensor's current latest
+  reading, even if it predates the rule — deliberate, so standing conditions
+  alert right away.
+
 ## Non-goals (MVP)
 
 Real sensor pairing, LoRa, auth/multi-user, cloud sync, mobile app, model

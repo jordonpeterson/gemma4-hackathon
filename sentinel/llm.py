@@ -1,8 +1,9 @@
 """Single client for llama-server (OpenAI-compatible, localhost).
 
-Exactly two public functions:
+Exactly two LLM-calling functions:
   parse_rule(text, known_sensors)  -> canonical rule dict | {"error": ...}
   ask_image(image_path, question)  -> {"answer": "yes|no|unsure", "reason": str}
+(plus health(), a non-LLM reachability probe for /api/health).
 
 CPU inference is slow and llama-server handles one request at a time well,
 so every call is serialized behind a module-level lock (scheduler and API

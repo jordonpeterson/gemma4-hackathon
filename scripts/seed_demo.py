@@ -68,10 +68,13 @@ def main() -> None:
 
     inbox = Path(config.INBOX_DIR) / "breakroom_cam"
     inbox.mkdir(parents=True, exist_ok=True)
+    # Numbered so ingestion order (sorted) ends on the EMPTY box — the demo
+    # rule evaluates the latest reading, and the latest must be the one that
+    # triggers the alert.
     samples = {
-        "box_full.png": draw_box(12),
-        "box_half.png": draw_box(5),
-        "box_empty.png": draw_box(0),
+        "1_box_full.png": draw_box(12),
+        "2_box_half.png": draw_box(5),
+        "3_box_empty.png": draw_box(0),
     }
     for fname, img in samples.items():
         path = inbox / fname

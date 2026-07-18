@@ -19,6 +19,7 @@ IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
 _last_cycle: Optional[str] = None
 _stop = threading.Event()
 _thread: Optional[threading.Thread] = None
+_cycle_lock = threading.Lock()  # scheduler thread vs /api/cycle
 
 
 def last_cycle_time() -> Optional[str]:
@@ -61,33 +62,50 @@ def evaluate_due_rules() -> int:
     rule's last evaluation. Returns number of evaluations run."""
     ran = 0
     for rule_row in db.list_rules(status="active"):
+        # One bad rule must never starve the others: everything per-rule is
+        # inside try/except.
         try:
             rule = json.loads(rule_row["parsed_json"])
-        except json.JSONDecodeError:
-            log.error("rule %s has corrupt parsed_json — skipping", rule_row["id"])
-            continue
-        sensor = db.get_sensor_by_name(rule["sensor"])
-        if sensor is None:
-            continue
-        reading = db.latest_reading(sensor["id"])
-        if reading is None:
-            continue
-        last_eval = db.last_evaluation_for_rule(rule_row["id"])
-        if last_eval is not None and last_eval["reading_id"] >= reading["id"]:
-            continue  # nothing new since we last looked
-        outcome = evaluator.evaluate(rule_row, reading)
-        ran += 1
-        log.info("rule %s -> %s%s", rule_row["id"], outcome["result"],
-                 " (ALERT)" if outcome["alerted"] else "")
+            if not isinstance(rule, dict) or "sensor" not in rule:
+                log.error("rule %s has corrupt parsed_json — skipping", rule_row["id"])
+                continue
+            sensor = db.get_sensor_by_name(rule["sensor"])
+            if sensor is None:
+                continue
+            reading = db.latest_reading(sensor["id"])
+            if reading is None:
+                continue
+            last_eval = db.last_evaluation_for_rule(rule_row["id"])
+            if last_eval is not None and last_eval["reading_id"] >= reading["id"]:
+                continue  # nothing new since we last looked
+            # Note: a freshly confirmed rule evaluates the sensor's current
+            # latest reading even if it predates the rule — deliberate for MVP
+            # (a standing condition should alert on confirm, not wait for the
+            # next reading).
+            outcome = evaluator.evaluate(rule_row, reading)
+            ran += 1
+            log.info("rule %s -> %s%s", rule_row["id"], outcome["result"],
+                     " (ALERT)" if outcome["alerted"] else "")
+        except Exception:
+            log.exception("rule %s failed — continuing with remaining rules",
+                          rule_row["id"])
     return ran
 
 
 def run_cycle() -> dict:
+    """One ingest+evaluate pass. Mutually exclusive: if a cycle is already
+    running (image evals take minutes on CPU), report that instead of racing
+    it and double-evaluating readings."""
     global _last_cycle
-    ingested = ingest_inbox()
-    evaluated = evaluate_due_rules()
-    _last_cycle = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    return {"ingested": ingested, "evaluated": evaluated, "at": _last_cycle}
+    if not _cycle_lock.acquire(blocking=False):
+        return {"skipped": "cycle already running", "at": _last_cycle}
+    try:
+        ingested = ingest_inbox()
+        evaluated = evaluate_due_rules()
+        _last_cycle = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        return {"ingested": ingested, "evaluated": evaluated, "at": _last_cycle}
+    finally:
+        _cycle_lock.release()
 
 
 def _loop() -> None:

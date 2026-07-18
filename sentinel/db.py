@@ -7,7 +7,8 @@ Connections are opened per call: cheap for SQLite, and it keeps the module
 safe to use from both the API thread-pool and the scheduler thread.
 """
 import sqlite3
-from typing import Any, Optional
+from contextlib import contextmanager
+from typing import Any, Iterator, Optional
 
 from sentinel import config
 
@@ -30,7 +31,7 @@ CREATE TABLE IF NOT EXISTS rules(
 CREATE TABLE IF NOT EXISTS readings(
   id INTEGER PRIMARY KEY,
   sensor_id INTEGER NOT NULL REFERENCES sensors(id),
-  kind TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK(kind IN ('image','numeric','boolean')),
   value REAL,
   image_path TEXT,
   created_at TEXT DEFAULT (datetime('now'))
@@ -55,11 +56,18 @@ CREATE TABLE IF NOT EXISTS alerts(
 """
 
 
-def get_conn() -> sqlite3.Connection:
+@contextmanager
+def get_conn() -> Iterator[sqlite3.Connection]:
+    """Open, commit-on-success, and ALWAYS close (macOS default ulimit -n is
+    256 — leaked fds add up)."""
     conn = sqlite3.connect(config.DB_PATH, timeout=30)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    return conn
+    try:
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
+        yield conn
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def init_db() -> None:
@@ -231,6 +239,9 @@ def list_alerts(unacked_only: bool = False) -> list[dict]:
         return _rows(conn.execute(q))
 
 
-def ack_alert(alert_id: int) -> None:
+def ack_alert(alert_id: int) -> bool:
+    """Returns True if an alert row was actually acknowledged."""
     with get_conn() as conn:
-        conn.execute("UPDATE alerts SET acknowledged = 1 WHERE id = ?", (alert_id,))
+        cur = conn.execute("UPDATE alerts SET acknowledged = 1 WHERE id = ?",
+                           (alert_id,))
+        return cur.rowcount > 0

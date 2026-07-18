@@ -11,6 +11,7 @@ and cooldown_minutes gate alert *creation*, not evaluation.
 """
 import json
 import logging
+import math
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -65,7 +66,8 @@ def _numeric_triggered(rule: dict, reading: dict, previous: Optional[dict]) -> b
         if op == "gt":
             return value > target
         if op == "eq":
-            return value == target
+            # Tolerant equality: scale/ADC feeds are noisy floats.
+            return math.isclose(value, target, rel_tol=1e-9, abs_tol=1e-9)
         raise ValueError(f"unknown operator {op!r}")
     if cond["type"] == "state_change":
         to = float(cond["to"]) if cond["to"] is not None else None
@@ -85,7 +87,7 @@ def evaluate(rule_row: dict, reading: dict) -> dict:
 
     Returns {"evaluation_id", "result", "alerted", "alert_id"}.
     """
-    rule = json.loads(rule_row["parsed_json"])
+    rule: dict = {}
     result = "error"
     model_answer = None
     latency_ms = None
@@ -93,6 +95,9 @@ def evaluate(rule_row: dict, reading: dict) -> dict:
     alert_id = None
 
     try:
+        rule = json.loads(rule_row["parsed_json"])
+        if not isinstance(rule, dict):
+            raise ValueError("parsed_json is not a rule object")
         if rule["modality"] in ("numeric", "boolean"):
             previous = db.previous_reading(reading["sensor_id"], reading["id"])
             result = "triggered" if _numeric_triggered(rule, reading, previous) else "ok"
@@ -113,8 +118,10 @@ def evaluate(rule_row: dict, reading: dict) -> dict:
     except Exception as exc:
         log.exception("evaluation failed for rule %s", rule_row["id"])
         result = "error"
-        if model_answer is None:
-            model_answer = json.dumps({"error": str(exc)}) if rule["modality"] == "image" else None
+        if model_answer is None and rule.get("modality") not in ("numeric", "boolean"):
+            # Keep model_answer NULL for pure-code paths; record the error
+            # for image/unknown paths so the audit trail explains the row.
+            model_answer = json.dumps({"error": str(exc)})
 
     evaluation_id = db.create_evaluation(
         rule_row["id"], reading["id"], result,

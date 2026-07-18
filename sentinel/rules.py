@@ -75,16 +75,23 @@ class Rule(BaseModel):
 
 
 def strip_fences(text: str) -> str:
-    """Defensively remove ```json ... ``` fences and surrounding chatter."""
+    """Defensively remove ```json ... ``` fences and surrounding chatter,
+    including trailing prose after the JSON object ("{...} Hope that helps!")."""
     text = text.strip()
     m = re.search(r"```(?:json)?\s*(.*?)```", text, re.DOTALL)
     if m:
         text = m.group(1).strip()
-    # If there is still prose around the JSON, grab the outermost object.
-    if not text.startswith("{"):
-        start, end = text.find("{"), text.rfind("}")
-        if start != -1 and end > start:
-            text = text[start:end + 1]
+    start = text.find("{")
+    if start != -1:
+        try:
+            _, end = json.JSONDecoder().raw_decode(text[start:])
+            return text[start:start + end]
+        except json.JSONDecodeError:
+            pass
+        # Last resort: outermost braces.
+        last = text.rfind("}")
+        if last > start:
+            return text[start:last + 1]
     return text
 
 
@@ -138,12 +145,28 @@ def summarize(rule: dict) -> str:
             f" Cooldown {cd_txt}.{hours_txt} Correct?")
 
 
+_COMPATIBLE_KINDS = {
+    "image": {"image"},
+    "numeric": {"numeric"},
+    "boolean": {"boolean", "numeric"},  # a 0/1 numeric feed can drive a boolean rule
+}
+
+
+class ModalityMismatch(ValueError):
+    pass
+
+
 def create_pending_rule(raw_instruction: str, parsed: dict) -> dict:
     """Persist a validated rule as pending_confirm. Returns the DB row +
-    summary."""
+    summary. Rejects rules whose modality can't be fed by the target
+    sensor's kind — otherwise a mis-parse would sit erroring every cycle."""
     sensor = db.get_sensor_by_name(parsed["sensor"])
     if sensor is None:  # should not happen after validate_parsed
         raise ValueError(f"sensor {parsed['sensor']!r} not found")
+    if sensor["kind"] not in _COMPATIBLE_KINDS[parsed["modality"]]:
+        raise ModalityMismatch(
+            f"rule modality {parsed['modality']!r} cannot be evaluated against "
+            f"sensor {sensor['name']!r} of kind {sensor['kind']!r}")
     rule_id = db.create_rule(sensor["id"], raw_instruction, json.dumps(parsed))
     row = db.get_rule(rule_id)
     row["parsed"] = parsed

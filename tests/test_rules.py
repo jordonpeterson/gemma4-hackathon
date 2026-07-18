@@ -148,3 +148,42 @@ def test_parse_rule_live():
     out = llm.parse_rule("alert me when the coke box in the break room is empty", KNOWN)
     assert out.get("sensor") == "breakroom_cam"
     assert out["condition"]["type"] == "visual_question"
+
+
+# ---------- modality vs sensor-kind guard ----------
+
+def test_modality_mismatch_rejected(demo_sensors):
+    bad = {
+        "sensor": "breakroom_cam", "modality": "numeric",
+        "condition": {"type": "threshold", "operator": "lt", "value": 5},
+        "action": {"type": "alert", "message": "x"},
+    }
+    parsed = rules.validate_parsed(bad, KNOWN)
+    with pytest.raises(rules.ModalityMismatch):
+        rules.create_pending_rule("bad", parsed)
+
+
+def test_modality_mismatch_via_api_is_422(demo_sensors, monkeypatch):
+    bad = {
+        "sensor": "keg_scale", "modality": "image",
+        "condition": {"type": "visual_question", "question": "Empty?"},
+        "action": {"type": "alert", "message": "x"},
+        "active_hours": {"start": "00:00", "end": "23:59"},
+        "cooldown_minutes": 240,
+    }
+    monkeypatch.setattr(llm, "parse_rule", lambda text, known: dict(bad))
+    client = TestClient(app)
+    r = client.post("/api/rules/parse", json={"text": "watch keg photo"})
+    assert r.status_code == 422
+    assert r.json()["error"] == "modality_mismatch"
+
+
+def test_boolean_rule_on_numeric_sensor_allowed(demo_sensors):
+    ok = {
+        "sensor": "keg_scale", "modality": "boolean",
+        "condition": {"type": "state_change", "to": True},
+        "action": {"type": "alert", "message": "x"},
+    }
+    parsed = rules.validate_parsed(ok, KNOWN)
+    row = rules.create_pending_rule("ok", parsed)
+    assert row["status"] == "pending_confirm"

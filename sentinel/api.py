@@ -44,7 +44,11 @@ def parse_rule(req: ParseRequest):
     if "error" in parsed:
         status = 502 if parsed["error"] in ("llm_unavailable",) else 422
         return JSONResponse(status_code=status, content=parsed)
-    row = rules.create_pending_rule(text, parsed)
+    try:
+        row = rules.create_pending_rule(text, parsed)
+    except rules.ModalityMismatch as exc:
+        return JSONResponse(status_code=422,
+                            content={"error": "modality_mismatch", "detail": str(exc)})
     return row  # includes parsed rule + human-readable summary, status pending_confirm
 
 
@@ -71,9 +75,13 @@ def disable_rule(rule_id: int):
 def get_rules():
     out = []
     for r in db.list_rules():
-        parsed = json.loads(r["parsed_json"])
-        r["parsed"] = parsed
-        r["summary"] = rules.summarize(parsed)
+        try:
+            parsed = json.loads(r["parsed_json"])
+            r["parsed"] = parsed
+            r["summary"] = rules.summarize(parsed)
+        except Exception:
+            r["parsed"] = None
+            r["summary"] = "(unparseable rule — disable it)"
         out.append(r)
     return out
 
@@ -129,7 +137,8 @@ def get_alerts(unacked: int = 0):
 
 @app.post("/api/alerts/{alert_id}/ack")
 def ack_alert(alert_id: int):
-    db.ack_alert(alert_id)
+    if not db.ack_alert(alert_id):
+        raise HTTPException(404, "alert not found")
     return {"ok": True}
 
 
